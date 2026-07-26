@@ -5,7 +5,7 @@ This repository contains the Python data pipeline built for my research on vulne
 The script `app.py` goes through the NIST National Vulnerability Database (NVD) API v2.0, gets a 30-day window of published CVEs, analyzes the severity metrics, and generates a statistical summary.
 
 > **Read the Paper:** Arvind, A. "Empirical Vulnerability Analysis and Threat Vector Mapping Across Major Software Ecosystems." *Zenodo* (2026).  
-> **DOI:** 
+> **DOI:** https://doi.org/10.5281/zenodo.21610629 
 
 
 
