@@ -23,7 +23,10 @@ Working with the raw NVD API presented a few technical problems.
 **Requirements:** Python 3.8+, `requests`, `pandas`
 
    ```bash
-   git clone [https://github.com/AA-0324/nvd_analysis.git](https://github.com/AA-0324/nvd_analysis.git)
+   git clone https://github.com/AA-0324/nvd_analysis.git
    cd nvd_analysis
-   pip install -r requirements.txt
-   python nvd_analysis.py
+   python app.py
+   ```
+
+## License
+See LICENSE file for more details :)
