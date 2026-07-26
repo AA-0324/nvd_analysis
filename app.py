@@ -1,9 +1,12 @@
 import re
+import time
 from datetime import datetime, timedelta
 import requests
 
 API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 TIMEOUT_LIMIT = 30
+SLEEP_BACKOFF = 15 
+MAX_RETRY_ATTEMPTS = 5
 
 # Note: Word-boundary regex (\b) is critical here. Initial prototype without \b 
 # resulted in false positives (e.g., matching "chromebook" when scanning for "chrome").
@@ -27,15 +30,11 @@ def get_cve_id_fallback(item):
         return "unknown-id"
 
 def assign_ecosystems(text_description):
-    # Some CVEs affect multiple stacks at once (e.g. Chrome engine bugs hitting Linux distros).
-    # Catch all matches instead of stopping at the first one.
     matched_tags = []
-    
     for name, pattern in ECOSYSTEM_REGEX.items():
         if pattern.search(text_description):
             matched_tags.append(name)
             
-    # Redundant check just in case, but safe
     if len(matched_tags) > 0:
         return matched_tags
     else:
@@ -94,18 +93,69 @@ def run_nvd_analysis():
         "pubEndDate": today_date.strftime("%Y-%m-%dT%H:%M:%S.000"),
     }
 
+    collected_rows = []
     tracking_stats = {"no_score_count": 0, "malformed_count": 0}
-    response = requests.get(API_URL, params=query_params, timeout=TIMEOUT_LIMIT)
-    
-    if response.status_code == 200:
-        data = response.json()
-        cve_list = data.get("vulnerabilities", [])
-        collected = []
-        for item in cve_list:
-            parsed = parse_single_cve(item, tracking_stats)
-            if parsed:
-                collected.append(parsed)
-        print(f"Sample parsed item: {collected[0]}")
+    consecutive_retries = 0
+
+    print("Gathering full 30-day dataset from NVD...")
+    print("Note: implementing a 6-second delay between requests to respect NVD's public rate limits.\n")
+
+    while True:
+        curr_index = query_params["startIndex"]
+        print(f"Fetching records starting from index: {curr_index}...")
+
+        try:
+            response = requests.get(API_URL, params=query_params, timeout=TIMEOUT_LIMIT)
+        except requests.exceptions.RequestException as net_err:
+            consecutive_retries += 1
+            if consecutive_retries > MAX_RETRY_ATTEMPTS:
+                print(f"Network failure after {MAX_RETRY_ATTEMPTS} attempts: {net_err}. Bailing out.")
+                break
+            wait_time = SLEEP_BACKOFF * consecutive_retries
+            print(f"Network hitch: {net_err}. Retry {consecutive_retries}/{MAX_RETRY_ATTEMPTS}, waiting {wait_time}s...")
+            time.sleep(wait_time)
+            continue
+
+        if response.status_code != 200:
+            if response.status_code in (403, 503):
+                consecutive_retries += 1
+                if consecutive_retries > MAX_RETRY_ATTEMPTS:
+                    print(f"HTTP {response.status_code} limit hit {MAX_RETRY_ATTEMPTS} times. Stopping loop.")
+                    break
+                wait_time = SLEEP_BACKOFF * consecutive_retries
+                print(f"Rate limited (HTTP {response.status_code}). Retry {consecutive_retries}/{MAX_RETRY_ATTEMPTS}, sleeping {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            else:
+                print(f"Unhandled API error: HTTP {response.status_code}")
+                break
+
+        consecutive_retries = 0
+
+        try:
+            json_payload = response.json()
+        except ValueError as json_err:
+            print(f"JSON decoding error: {json_err}")
+            break
+
+        cve_list = json_payload.get("vulnerabilities", [])
+        if not cve_list:
+            break
+
+        fetched_so_far = query_params["startIndex"] + len(cve_list)
+        total_api_results = json_payload.get("totalResults", fetched_so_far)
+
+        for cve_item in cve_list:
+            parsed_row = parse_single_cve(cve_item, tracking_stats)
+            if parsed_row is not None:
+                collected_rows.append(parsed_row)
+
+        query_params["startIndex"] += len(cve_list)
+        
+        if query_params["startIndex"] >= total_api_results:
+            break
+
+        time.sleep(6)
 
 if __name__ == "__main__":
     run_nvd_analysis()
